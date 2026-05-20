@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -13,9 +15,22 @@ scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 JOB_ID = "daily_send"
 
 
+def _today_local() -> str:
+    return datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
+
+
 async def _daily_job():
     if db.get_setting("paused") == "1":
         log.info("Paused — yuborilmadi")
+        return
+
+    today = _today_local()
+    paused_range = db.find_pause_for_date(today)
+    if paused_range:
+        log.info(
+            "Bugun (%s) pause oralig'ida: %s — %s — yuborilmadi",
+            today, paused_range["start_date"], paused_range["end_date"],
+        )
         return
 
     template = db.get_setting("message") or ""

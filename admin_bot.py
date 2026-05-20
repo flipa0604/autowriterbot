@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import date
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
@@ -47,6 +48,13 @@ def is_valid_time(s: str) -> bool:
     return bool(re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", s))
 
 
+def parse_iso_date(s: str) -> date | None:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
 # ---------- commands ----------
 
 HELP_TEXT = """
@@ -77,6 +85,11 @@ HELP_TEXT = """
 /test @username — bittaga yuborish
 /status — umumiy holat
 /log — oxirgi 10 ta urinish
+
+<b>Ta'til (sana oralig'i)</b>
+/skip 2026-05-25 2026-06-05 — oraliqni qo'shish
+/skips — barcha oraliqlar
+/unskip 3 — id bo'yicha oraliqni o'chirish
 """
 
 
@@ -306,6 +319,66 @@ async def cmd_test(message: Message, command: CommandObject):
     await message.answer(text)
 
 
+# ---- skip date ranges ----
+
+@dp.message(Command("skip"))
+async def cmd_skip(message: Message, command: CommandObject):
+    args = (command.args or "").strip().split()
+    if len(args) != 2:
+        await message.answer(
+            "Format: <code>/skip 2026-05-25 2026-06-05</code>\n"
+            "Boshlanish va tugash sanalari (ikkalasi ham kiritilgan kunlar pauza).",
+            parse_mode="HTML",
+        )
+        return
+
+    start = parse_iso_date(args[0])
+    end = parse_iso_date(args[1])
+    if not start or not end:
+        await message.answer("Sana formati noto'g'ri. YYYY-MM-DD bo'lsin (masalan 2026-05-25).")
+        return
+    if start > end:
+        await message.answer("Boshlanish sanasi tugashdan kech bo'lmasligi kerak.")
+        return
+
+    range_id = db.add_pause_range(start.isoformat(), end.isoformat())
+    await message.answer(
+        f"✅ Oraliq qo'shildi (id={range_id}): <b>{start} — {end}</b>\n"
+        f"Shu oraliqdagi har bir kun xabar yuborilmaydi.",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("skips"))
+async def cmd_skips(message: Message):
+    ranges = db.list_pause_ranges()
+    if not ranges:
+        await message.answer("Hech qanday ta'til oralig'i yo'q.")
+        return
+
+    today = date.today().isoformat()
+    lines = ["<b>Ta'til oraliqlari:</b>"]
+    for r in ranges:
+        mark = "🔴" if r["start_date"] <= today <= r["end_date"] else "⚪"
+        lines.append(
+            f"{mark} <code>{r['id']}</code>. {r['start_date']} — {r['end_date']}"
+        )
+    lines.append("\n🔴 = bugun shu oraliq ichida")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@dp.message(Command("unskip"))
+async def cmd_unskip(message: Message, command: CommandObject):
+    arg = (command.args or "").strip()
+    if not arg.isdigit():
+        await message.answer("Format: <code>/unskip 3</code> (id raqami)", parse_mode="HTML")
+        return
+    if db.remove_pause_range(int(arg)):
+        await message.answer(f"🗑 Oraliq #{arg} o'chirildi.")
+    else:
+        await message.answer(f"❌ #{arg} topilmadi.")
+
+
 # ---- status & log ----
 
 @dp.message(Command("status"))
@@ -315,12 +388,19 @@ async def cmd_status(message: Message):
     paused = db.get_setting("paused") == "1"
     nxt = scheduler.next_run_time()
 
+    today = date.today().isoformat()
+    active_range = db.find_pause_for_date(today)
+    range_line = (
+        f"\n⏸ Ta'til: <b>{active_range['start_date']} — {active_range['end_date']}</b>"
+        if active_range else ""
+    )
+
     text = (
         f"<b>📊 Holat</b>\n\n"
         f"Xodimlar: <b>{active}</b> faol / {len(employees)} jami\n"
         f"Vaqt: <b>{db.get_setting('send_time')}</b>\n"
         f"Ish kunlari: <b>{db.get_setting('workdays')}</b>\n"
-        f"Holat: <b>{'⏸ Pauza' if paused else '▶️ Faol'}</b>\n"
+        f"Holat: <b>{'⏸ Pauza' if paused else '▶️ Faol'}</b>{range_line}\n"
         f"Keyingi yuborish: <b>{nxt}</b>"
     )
     await message.answer(text, parse_mode="HTML")

@@ -42,6 +42,13 @@ def init_db():
                 status TEXT NOT NULL,   -- ok | error
                 error TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS pause_ranges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_date TEXT NOT NULL,   -- YYYY-MM-DD
+                end_date TEXT NOT NULL,     -- YYYY-MM-DD
+                created_at TEXT NOT NULL
+            );
         """)
 
         defaults = {
@@ -142,3 +149,41 @@ def recent_logs(limit: int = 20) -> list[sqlite3.Row]:
         return conn.execute(
             "SELECT * FROM send_log ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+
+# ---------- pause ranges ----------
+
+def add_pause_range(start_date: str, end_date: str) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO pause_ranges (start_date, end_date, created_at) "
+            "VALUES (?, ?, ?)",
+            (start_date, end_date, datetime.utcnow().isoformat()),
+        )
+        return cur.lastrowid
+
+
+def list_pause_ranges() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM pause_ranges ORDER BY start_date"
+        ).fetchall()
+
+
+def remove_pause_range(range_id: int) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM pause_ranges WHERE id = ?", (range_id,)
+        )
+        return cur.rowcount
+
+
+def find_pause_for_date(date_str: str) -> Optional[sqlite3.Row]:
+    """Returns the matching range if date falls within any pause range."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM pause_ranges "
+            "WHERE start_date <= ? AND end_date >= ? "
+            "ORDER BY start_date LIMIT 1",
+            (date_str, date_str),
+        ).fetchone()
